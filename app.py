@@ -2263,7 +2263,29 @@ class MainWindow(QMainWindow):
         """)
 
 def main():
+    # Suppress annoying GTK/ALSA/Qt warnings on Linux terminal during platform initialization
+    saved_stderr = None
+    if sys.platform.startswith('linux'):
+        try:
+            stderr_fd = sys.stderr.fileno()
+            saved_stderr = os.dup(stderr_fd)
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, stderr_fd)
+            os.close(devnull)
+        except:
+            pass
+
     app = QApplication(sys.argv)
+
+    # Restore stderr
+    if sys.platform.startswith('linux') and saved_stderr is not None:
+        try:
+            stderr_fd = sys.stderr.fileno()
+            os.dup2(saved_stderr, stderr_fd)
+            os.close(saved_stderr)
+        except:
+            pass
+
     app.setStyle('Fusion')
     window = MainWindow()
     window.show()
