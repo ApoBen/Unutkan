@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+unutkan.spec
+.tmp_*
+*.log
+.DS_Store
