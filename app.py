@@ -1,5 +1,18 @@
 import sys
 import os
+
+# Suppress annoying GTK/ALSA/Qt platform plugin warnings during import and initialization
+saved_stderr_fd = None
+if sys.platform.startswith('linux'):
+    try:
+        stderr_fd = sys.stderr.fileno()
+        saved_stderr_fd = os.dup(stderr_fd)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stderr_fd)
+        os.close(devnull)
+    except:
+        pass
+
 import uuid
 import zipfile
 import shutil
@@ -2263,26 +2276,16 @@ class MainWindow(QMainWindow):
         """)
 
 def main():
-    # Suppress annoying GTK/ALSA/Qt warnings on Linux terminal during platform initialization
-    saved_stderr = None
-    if sys.platform.startswith('linux'):
-        try:
-            stderr_fd = sys.stderr.fileno()
-            saved_stderr = os.dup(stderr_fd)
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, stderr_fd)
-            os.close(devnull)
-        except:
-            pass
-
     app = QApplication(sys.argv)
 
     # Restore stderr
-    if sys.platform.startswith('linux') and saved_stderr is not None:
+    global saved_stderr_fd
+    if sys.platform.startswith('linux') and saved_stderr_fd is not None:
         try:
             stderr_fd = sys.stderr.fileno()
-            os.dup2(saved_stderr, stderr_fd)
-            os.close(saved_stderr)
+            os.dup2(saved_stderr_fd, stderr_fd)
+            os.close(saved_stderr_fd)
+            saved_stderr_fd = None
         except:
             pass
 
