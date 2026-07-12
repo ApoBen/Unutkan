@@ -13,11 +13,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${PURPLE}"
-echo "    __  __ _   _ _   _ _____ _  __     _   _"
-echo "   |  \/  | | | | \ | |_   _| |/ /    | \ | |"
-echo "   | |\/| | | | |  \| | | | | ' /_____|  \| |"
-echo "   | |  | | |_| | |\  | | | | . \_____| |\  |"
-echo "   |_|  |_|\___/|_| \_| |_| |_|\_\    |_| \_|"
+echo "  _   _ _   _ _   _ _____ _  __     _     _   _ "
+echo " | | | | \ | | | | |_   _| |/ /    / \   | \ | |"
+echo " | | | |  \| | | |   | | | ' /    / _ \  |  \| |"
+echo " | |_| | |\  | |_|   | | | . \   / ___ \ | |\  |"
+echo "  \___/|_| \_|\___/  |_| |_|\_\ /_/   \_\|_| \_|"
 echo -e "${NC}"
 echo -e "${BLUE}=== Unutkan - Güvenli Metadata Temizleyici Kurulumu ===${NC}\n"
 
@@ -38,7 +38,7 @@ if [ -f "$LOCAL_BINARY" ]; then
     cp "$LOCAL_BINARY" "$BIN_DIR/unutkan"
 else
     echo -e "${GREEN}[*] Binary dosyası GitHub Releases üzerinden indiriliyor...${NC}"
-    if curl -sSL -o "$BIN_DIR/unutkan" "https://github.com/ApoBen/Unutkan/releases/latest/download/unutkan"; then
+    if curl -f -sSL -o "$BIN_DIR/unutkan" "https://github.com/ApoBen/Unutkan/releases/latest/download/unutkan"; then
         echo -e "${GREEN}[✓] İndirme tamamlandı.${NC}"
     else
         if [ -f "dist/unutkan" ]; then
