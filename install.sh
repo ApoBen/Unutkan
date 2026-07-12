@@ -31,9 +31,16 @@ mkdir -p "$DESKTOP_DIR"
 
 # Geliştirme/Yerel test kontrolü
 # Eğer derlenmiş binary dist klasöründe varsa yerel kopyalama yap, yoksa indir.
-LOCAL_BINARY="$(dirname "$0")/dist/unutkan"
+LOCAL_BINARY=""
+if [ -f "$(dirname "$0")/dist/unutkan" ]; then
+    LOCAL_BINARY="$(dirname "$0")/dist/unutkan"
+elif [ -f "./dist/unutkan" ]; then
+    LOCAL_BINARY="./dist/unutkan"
+elif [ -f "/home/apobenn/Masaüstü/unutkan/dist/unutkan" ]; then
+    LOCAL_BINARY="/home/apobenn/Masaüstü/unutkan/dist/unutkan"
+fi
 
-if [ -f "$LOCAL_BINARY" ]; then
+if [ -n "$LOCAL_BINARY" ]; then
     echo -e "${GREEN}[*] Yerel olarak derlenmiş binary bulundu, kopyalanıyor...${NC}"
     cp "$LOCAL_BINARY" "$BIN_DIR/unutkan"
 else
