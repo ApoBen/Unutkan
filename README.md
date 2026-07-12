@@ -2,6 +2,8 @@
 
 Kişisel veri güvenliğinizi ve gizliliğinizi korumak için tasarlanmış, tamamen çevrimdışı (offline) çalışan bir Linux masaüstü dijital hijyen uygulamasıdır.
 
+![Unutkan Arayüzü](screenshot.png)
+
 ---
 
 ## Özellikler
