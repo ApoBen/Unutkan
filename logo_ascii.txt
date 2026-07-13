@@ -1,16 +1,16 @@
-       .------------.
-      / .----------. \
-     / /            \ \
-     | |            | |
-     | |            | |
-     | |            | |
-     | |            | |
-    _| |____________| |_
-  .' |_|            |_| '.
-  '._______ ____ _______.'
-  |       .'____'.       |
-  '.__.'.'   ()   '.'.__.'
-  '.__  | UNUTKAN |  __.'
-  |    '.'.____.'.'    |
-  '.______'.____.'______.'
-  '.____________________.'
+           .,::;;::,.
+        .cllllllllllllc.
+      .llllllllllllllllll.
+     .llllllllllllllllllll.
+    .llllllllllllllllllllll.
+    ;llllllllllllllllllllll;
+    llllllllllllllllllllllll
+    llllllllllllllllllllllll
+    llllllllllllllllllllllll
+    ;llllllllllllllllllllll;
+     ;llllllllllllllllllll;
+      'llllllllllllllllll'
+       'llllllllllllllll'
+         'llllllllllll'
+           'llllllll'
+             'cccc'
