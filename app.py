@@ -10,7 +10,7 @@ if sys.platform.startswith('linux'):
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, stderr_fd)
         os.close(devnull)
-    except:
+    except OSError:
         pass
 
 import uuid
@@ -18,8 +18,21 @@ import zipfile
 import shutil
 import re
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import gc
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
+
+# --- Security Helpers ---
+MAX_VAULT_FILE_SIZE_MB = 100  # Default max file size for vault (MB)
+
+def validate_file_path(path):
+    """Validate that a path is a regular file, not a symlink, device, or directory."""
+    real_path = os.path.realpath(path)
+    if os.path.islink(path):
+        return False, real_path, "Sembolik linkler güvenlik nedeniyle kabul edilmiyor."
+    if not os.path.isfile(real_path):
+        return False, real_path, "Yol bir dosyaya işaret etmiyor (dizin, cihaz veya pipe olabilir)."
+    return True, real_path, ""
 
 from PySide6.QtCore import Qt, QSize, QCoreApplication, QTimer
 from PySide6.QtWidgets import (
@@ -334,8 +347,9 @@ class DropZone(QFrame):
         file_paths = []
         for url in urls:
             file_path = url.toLocalFile()
-            if os.path.exists(file_path):
-                file_paths.append(file_path)
+            valid, real_path, err = validate_file_path(file_path)
+            if valid:
+                file_paths.append(real_path)
         
         if file_paths:
             self.on_files_dropped(file_paths)
@@ -742,7 +756,7 @@ class CleanerWidget(QWidget):
                             if isinstance(data, bytes):
                                 try:
                                     data = data.decode(errors='replace')
-                                except:
+                                except (UnicodeDecodeError, AttributeError):
                                     pass
                             metadata[f"EXIF: {tag}"] = str(data)
                     
@@ -812,17 +826,22 @@ class CleanerWidget(QWidget):
     def handle_files_dropped(self, paths):
         added_count = 0
         for path in paths:
-            ext = os.path.splitext(path)[1].lower()
+            valid, real_path, err = validate_file_path(path)
+            if not valid:
+                self.log(f"Reddedildi ({os.path.basename(path)}): {err}", is_error=True)
+                continue
+
+            ext = os.path.splitext(real_path)[1].lower()
             if ext not in self.supported_exts:
-                self.log(f"Desteklenmeyen dosya formatı yoksayıldı: {os.path.basename(path)}", is_error=True)
+                self.log(f"Desteklenmeyen dosya formatı yoksayıldı: {os.path.basename(real_path)}", is_error=True)
                 continue
             
-            if any(f["path"] == path for f in self.selected_files):
+            if any(f["path"] == real_path for f in self.selected_files):
                 continue
             
             file_info = {
-                "path": path,
-                "name": os.path.basename(path),
+                "path": real_path,
+                "name": os.path.basename(real_path),
                 "status": "Hazır",
                 "error": ""
             }
@@ -913,8 +932,10 @@ class CleanerWidget(QWidget):
     def clean_file(self, file_path, overwrite, randomize):
         temp_path = ""
         try:
-            if not os.path.exists(file_path):
-                return False, "", "Dosya bulunamadı."
+            valid, real_path, err = validate_file_path(file_path)
+            if not valid:
+                return False, "", err
+            file_path = real_path
 
             directory = os.path.dirname(file_path)
             filename = os.path.basename(file_path)
@@ -960,7 +981,7 @@ class CleanerWidget(QWidget):
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except:
+                except OSError:
                     pass
             return False, "", str(e)
 
@@ -1118,8 +1139,8 @@ class ShredderWidget(QWidget):
         self.combo_method = QComboBox()
         self.combo_method.addItems([
             "Hızlı Sıfırla (1 Geçiş - Sıfır Yazma)",
-            "Güvenli (3 Geçiş - DoD 5220.22-M)",
-            "Maksimum Güvenlik (7 Geçiş - Gutmann)"
+            "Güvenli (3 Geçiş - Rastgele + Sıfır)",
+            "Maksimum Güvenlik (7 Geçiş - Çoklu Desen)"
         ])
         self.combo_method.setCurrentIndex(1)
         options_layout.addWidget(self.combo_method)
@@ -1256,12 +1277,17 @@ class ShredderWidget(QWidget):
     def handle_files_dropped(self, paths):
         added_count = 0
         for path in paths:
-            if any(f["path"] == path for f in self.selected_files):
+            valid, real_path, err = validate_file_path(path)
+            if not valid:
+                self.log(f"Reddedildi ({os.path.basename(path)}): {err}", is_error=True)
+                continue
+
+            if any(f["path"] == real_path for f in self.selected_files):
                 continue
             
             file_info = {
-                "path": path,
-                "name": os.path.basename(path),
+                "path": real_path,
+                "name": os.path.basename(real_path),
                 "status": "Hazır",
                 "error": ""
             }
@@ -1345,8 +1371,10 @@ class ShredderWidget(QWidget):
 
     def shred_file(self, file_path, method_index):
         try:
-            if not os.path.exists(file_path):
-                return False, "Dosya bulunamadı."
+            valid, real_path, err = validate_file_path(file_path)
+            if not valid:
+                return False, err
+            file_path = real_path
                 
             file_size = os.path.getsize(file_path)
             
@@ -1357,7 +1385,9 @@ class ShredderWidget(QWidget):
             else:
                 passes = ['random', b'\x55', b'\xAA', 'random', b'\x00', 'random', b'\x00']
 
-            with open(file_path, "r+b") as f:
+            # Open with O_NOFOLLOW to prevent symlink race conditions
+            fd = os.open(file_path, os.O_RDWR | os.O_NOFOLLOW)
+            with os.fdopen(fd, "r+b") as f:
                 for p_num, pattern in enumerate(passes):
                     self.log(f"  [{os.path.basename(file_path)}] Geçiş {p_num + 1}/{len(passes)} yazılıyor...")
                     f.seek(0)
@@ -1389,6 +1419,8 @@ class ShredderWidget(QWidget):
             
             with open(temp_path, "w") as f:
                 f.truncate(0)
+                f.flush()
+                os.fsync(f.fileno())
                 
             os.remove(temp_path)
             return True, ""
@@ -1611,7 +1643,7 @@ class SanitizerWidget(QWidget):
             new_parts = list(parsed)
             new_parts[4] = new_query
             return urlunparse(new_parts) + trail
-        except:
+        except (ValueError, KeyError):
             return url_str
 
     def _mask_email(self, email_str):
@@ -1622,7 +1654,7 @@ class SanitizerWidget(QWidget):
             else:
                 masked = mailbox[0] + '***' + mailbox[-1]
             return f"{masked}@{domain}"
-        except:
+        except (ValueError, IndexError):
             return email_str
 
     def _mask_phone(self, phone_str):
@@ -1650,6 +1682,7 @@ class VaultWidget(QWidget):
         self.mem_files = {}        # dict mapping filename -> bytearray
         self.time_left = 0
         self.total_time = 120      # default 2 mins
+        self.max_file_size_mb = MAX_VAULT_FILE_SIZE_MB  # User-configurable file size limit
         
         # QTimer
         self.timer = QTimer(self)
@@ -1752,6 +1785,21 @@ class VaultWidget(QWidget):
             }
         """)
         left_layout.addWidget(self.progress_bar)
+        
+        left_layout.addWidget(QLabel("Maks. Dosya Boyutu:"))
+        self.combo_max_size = QComboBox()
+        self.combo_max_size.addItems([
+            "50 MB",
+            "100 MB",
+            "250 MB",
+            "500 MB",
+            "1 GB",
+            "Limitsiz"
+        ])
+        self.combo_max_size.setCurrentIndex(1)  # Default 100 MB
+        self.combo_max_size.currentIndexChanged.connect(self.on_max_size_changed)
+        left_layout.addWidget(self.combo_max_size)
+
         left_layout.addStretch()
 
         self.btn_wipe = QPushButton("Belleği Şimdi Kazı (Wipe)")
@@ -1932,6 +1980,15 @@ class VaultWidget(QWidget):
         else:
             return 600
 
+    def on_max_size_changed(self, index):
+        sizes = [50, 100, 250, 500, 1024, 0]  # 0 = unlimited
+        self.max_file_size_mb = sizes[index]
+        if self.max_file_size_mb == 0:
+            self.log("Dosya boyutu limiti kaldırıldı (Dikkat: büyük dosyalar sistemi yavaşlatabilir).")
+            self.max_file_size_mb = 999999  # Effectively unlimited
+        else:
+            self.log(f"Maksimum dosya boyutu {self.max_file_size_mb} MB olarak ayarlandı.")
+
     def on_duration_changed(self):
         if self.timer.isActive():
             self.total_time = self.get_selected_duration()
@@ -1976,6 +2033,8 @@ class VaultWidget(QWidget):
             return
             
         self.mem_text = bytearray(text, 'utf-8')
+        del text  # Remove reference to immutable str copy
+        gc.collect()  # Best-effort garbage collection
         self.txt_vault_input.clear()
         self.log("Metin verisi RAM belleğe yüklendi ve ekran temizlendi.")
         self.start_vault_timer()
@@ -2003,16 +2062,28 @@ class VaultWidget(QWidget):
 
     def handle_files_dropped(self, paths):
         added = 0
+        max_size = self.max_file_size_mb * 1024 * 1024
         for path in paths:
-            if not os.path.exists(path):
+            valid, real_path, err = validate_file_path(path)
+            if not valid:
+                self.log(f"Reddedildi ({os.path.basename(path)}): {err}", is_error=True)
                 continue
-            filename = os.path.basename(path)
+            
+            file_size = os.path.getsize(real_path)
+            if file_size > max_size:
+                size_mb = file_size / (1024 * 1024)
+                self.log(f"Reddedildi ({os.path.basename(real_path)}): Dosya boyutu ({size_mb:.1f} MB) belirlenen limiti ({self.max_file_size_mb} MB) aşıyor.", is_error=True)
+                continue
+
+            filename = os.path.basename(real_path)
             try:
-                with open(path, 'rb') as f:
+                with open(real_path, 'rb') as f:
                     data = f.read()
-                # Store as bytearray in memory
+                # Store as mutable bytearray in memory, delete immutable bytes copy
                 self.mem_files[filename] = bytearray(data)
-                self.log(f"Dosya RAM belleğe yüklendi: {filename} ({len(data)} bayt)")
+                del data
+                gc.collect()
+                self.log(f"Dosya RAM belleğe yüklendi: {filename} ({file_size} bayt)")
                 added += 1
             except Exception as e:
                 self.log(f"Dosya yükleme hatası ({filename}): {str(e)}", is_error=True)
@@ -2075,6 +2146,7 @@ class VaultWidget(QWidget):
             self.log_console.clear()
 
             # Wiping text memory
+            wipe_errors = []
             if self.mem_text:
                 try:
                     mv = memoryview(self.mem_text)
@@ -2084,14 +2156,15 @@ class VaultWidget(QWidget):
                     for offset in range(0, length, block_size):
                         chunk = min(block_size, length - offset)
                         mv[offset:offset+chunk] = zero_block[:chunk]
-                except:
-                    pass
+                    self.log("[Güvenli] Metin bellek bölgesi güvenli şekilde kazındı.")
+                except (TypeError, ValueError, BufferError) as e:
+                    wipe_errors.append(f"Metin kazıma hatası: {e}")
+                    self.log(f"[UYARI] Metin bellek kazıma başarısız: {e}", is_error=True)
                 self.mem_text = None
-                self.log("[Güvenli] Metin bellek bölgesi güvenli şekilde kazındı.")
 
             # Wiping files memory
             if self.mem_files:
-                for filename, data in self.mem_files.items():
+                for filename, data in list(self.mem_files.items()):
                     try:
                         mv = memoryview(data)
                         block_size = 1024 * 1024 # 1MB blocks
@@ -2100,14 +2173,19 @@ class VaultWidget(QWidget):
                         for offset in range(0, length, block_size):
                             chunk = min(block_size, length - offset)
                             mv[offset:offset+chunk] = zero_block[:chunk]
-                    except:
-                        pass
-                    self.log(f"[Güvenli] '{filename}' dosya tamponu güvenli şekilde kazındı.")
+                        self.log(f"[Güvenli] Dosya tamponu güvenli şekilde kazındı.")
+                    except (TypeError, ValueError, BufferError) as e:
+                        wipe_errors.append(f"Dosya kazıma hatası: {e}")
+                        self.log(f"[UYARI] Dosya bellek kazıma başarısız: {e}", is_error=True)
                 self.mem_files.clear()
                 
             self.safely_clear_list(self.list_files)
             self.txt_vault_input.clear()
-            self.log("Geçici bellek tamamen kazındı, kasa kilitlendi.")
+            gc.collect()
+            if wipe_errors:
+                self.log("[UYARI] Bazı bellek bölgeleri güvenli kazınamadı!", is_error=True)
+            else:
+                self.log("Geçici bellek tamamen kazındı, kasa kilitlendi.")
         except Exception as e:
             import traceback
             err_msg = traceback.format_exc()
@@ -2286,7 +2364,7 @@ def main():
             os.dup2(saved_stderr_fd, stderr_fd)
             os.close(saved_stderr_fd)
             saved_stderr_fd = None
-        except:
+        except OSError:
             pass
 
     app.setStyle('Fusion')
