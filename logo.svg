@@ -24,8 +24,8 @@
         stroke-width="6" 
         stroke-opacity="0.15" />
 
-  <!-- Lock Shackle (Kilit Kulbu) - Closed Lock Style -->
-  <path d="M 196,240 V 170 C 196,120 316,120 316,170 V 240" 
+  <!-- Lock Shackle (Kilit Kulbu) - Open Lock Style (Unlocked) -->
+  <path d="M 196,240 V 170 C 196,120 316,120 316,170 V 205" 
         stroke="#ffffff" 
         stroke-width="28" 
         stroke-linecap="round" 
