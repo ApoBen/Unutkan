@@ -90,12 +90,30 @@ else
     fi
 fi
 
+# Uninstall Betiği Kurulumu
+if [ -f "$(dirname "$0")/uninstall.sh" ]; then
+    echo -e "${GREEN}[*] Yerel uninstall betiği kopyalanıyor...${NC}"
+    cp "$(dirname "$0")/uninstall.sh" "$BIN_DIR/unutkan-uninstall"
+elif [ -f "uninstall.sh" ]; then
+    echo -e "${GREEN}[*] Yerel uninstall betiği kopyalanıyor...${NC}"
+    cp "uninstall.sh" "$BIN_DIR/unutkan-uninstall"
+else
+    echo -e "${GREEN}[*] Uninstall betiği GitHub üzerinden indiriliyor...${NC}"
+    if curl -f -sSL -o "$BIN_DIR/unutkan-uninstall" "https://raw.githubusercontent.com/ApoBen/Unutkan/main/uninstall.sh"; then
+        echo -e "${GREEN}[✓] Uninstall betiği indirme tamamlandı.${NC}"
+    else
+        echo -e "${RED}[Hata] Uninstall betiği indirilemedi.${NC}"
+    fi
+fi
+
 # Çalıştırılabilirlik izinleri ver
 chmod +x "$BIN_DIR/unutkan"
 chmod +x "$BIN_DIR/unutkantui"
-echo -e "${GREEN}[✓] Binary dosyaları başarıyla yerleştirildi:${NC}"
+chmod +x "$BIN_DIR/unutkan-uninstall"
+echo -e "${GREEN}[✓] Çalıştırılabilir dosyalar başarıyla yerleştirildi:${NC}"
 echo -e "    - GUI: $BIN_DIR/unutkan"
 echo -e "    - TUI: $BIN_DIR/unutkantui"
+echo -e "    - Uninstall: $BIN_DIR/unutkan-uninstall"
 
 # Masaüstü Kısayolu (.desktop) Oluştur (Sadece GUI için)
 DESKTOP_FILE="$DESKTOP_DIR/unutkan.desktop"
@@ -125,4 +143,5 @@ fi
 
 echo -e "\n${GREEN}=== Kurulum Başarıyla Tamamlandı! ===${NC}"
 echo -e "GUI arayüzü için: ${PURPLE}unutkan${NC}"
-echo -e "TUI (Terminal) arayüzü için: ${PURPLE}unutkantui${NC} yazabilirsiniz.\n"
+echo -e "TUI (Terminal) arayüzü için: ${PURPLE}unutkantui${NC}"
+echo -e "Uygulamayı kaldırmak için: ${PURPLE}unutkan-uninstall${NC} yazabilirsiniz.\n"

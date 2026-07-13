@@ -14,7 +14,21 @@ Terminalden aşağıdaki komutu çalıştırarak en güncel kararlı sürümü o
 curl -sSL https://raw.githubusercontent.com/ApoBen/Unutkan/main/install.sh | bash
 ```
 
-*Bu komut uygulamayı yerel dizininize (`~/.local/bin/unutkan`) kuracak ve masaüstünüzde (`~/.local/share/applications`) bir kısayol oluşturacaktır.*
+*Bu komut uygulamayı yerel dizininize (`~/.local/bin/unutkan` ve `~/.local/bin/unutkantui`) kuracak ve masaüstünüzde (`~/.local/share/applications`) bir kısayol oluşturacaktır.*
+
+### ❌ Uygulamayı Kaldırma (Uninstall)
+
+Uygulamayı sisteminizden tamamen temizlemek için şu komutu çalıştırabilirsiniz:
+
+```bash
+unutkan-uninstall
+```
+
+Veya depodan doğrudan tek komutla kaldırmak için:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ApoBen/Unutkan/main/uninstall.sh | bash
+```
 
 ---
 
