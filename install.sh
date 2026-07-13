@@ -32,6 +32,8 @@ mkdir -p "$DESKTOP_DIR"
 # Geliştirme/Yerel test kontrolü
 # Eğer derlenmiş binary dist klasöründe varsa yerel kopyalama yap, yoksa indir.
 LOCAL_BINARY=""
+LOCAL_TUI_BINARY=""
+
 for path in "$(dirname "$0")/dist/unutkan" "./dist/unutkan" "$HOME/Masaüstü/unutkan/dist/unutkan" "$HOME/Desktop/unutkan/dist/unutkan" "$HOME/unutkan/dist/unutkan"; do
     if [ -f "$path" ]; then
         LOCAL_BINARY="$path"
@@ -39,28 +41,63 @@ for path in "$(dirname "$0")/dist/unutkan" "./dist/unutkan" "$HOME/Masaüstü/un
     fi
 done
 
+for path in "$(dirname "$0")/dist/unutkantui" "./dist/unutkantui" "$HOME/Masaüstü/unutkan/dist/unutkantui" "$HOME/Desktop/unutkan/dist/unutkantui" "$HOME/unutkan/dist/unutkantui"; do
+    if [ -f "$path" ]; then
+        LOCAL_TUI_BINARY="$path"
+        break
+    fi
+done
+
+# GUI Kurulumu
 if [ -n "$LOCAL_BINARY" ]; then
-    echo -e "${GREEN}[*] Yerel olarak derlenmiş binary bulundu, kopyalanıyor...${NC}"
+    echo -e "${GREEN}[*] Yerel olarak derlenmiş GUI binary bulundu, kopyalanıyor...${NC}"
     cp "$LOCAL_BINARY" "$BIN_DIR/unutkan"
 else
-    echo -e "${GREEN}[*] Binary dosyası GitHub Releases üzerinden indiriliyor...${NC}"
+    echo -e "${GREEN}[*] GUI binary dosyası GitHub Releases üzerinden indiriliyor...${NC}"
     if curl -f -sSL -o "$BIN_DIR/unutkan" "https://github.com/ApoBen/Unutkan/releases/latest/download/unutkan"; then
-        echo -e "${GREEN}[✓] İndirme tamamlandı.${NC}"
+        echo -e "${GREEN}[✓] GUI indirme tamamlandı.${NC}"
     else
         if [ -f "dist/unutkan" ]; then
             cp "dist/unutkan" "$BIN_DIR/unutkan"
         else
-            echo -e "${RED}[Hata] Binary dosyası indirilemedi ve yerel 'dist/unutkan' dosyası bulunamadı.${NC}"
+            echo -e "${RED}[Hata] GUI dosyası indirilemedi ve yerel 'dist/unutkan' bulunamadı.${NC}"
             exit 1
         fi
     fi
 fi
 
-# Çalıştırılabilirlik izni ver
-chmod +x "$BIN_DIR/unutkan"
-echo -e "${GREEN}[✓] Binary başarıyla yerleştirildi: $BIN_DIR/unutkan${NC}"
+# TUI Kurulumu
+if [ -n "$LOCAL_TUI_BINARY" ]; then
+    echo -e "${GREEN}[*] Yerel olarak derlenmiş TUI binary bulundu, kopyalanıyor...${NC}"
+    cp "$LOCAL_TUI_BINARY" "$BIN_DIR/unutkantui"
+else
+    echo -e "${GREEN}[*] TUI binary dosyası GitHub Releases üzerinden indiriliyor...${NC}"
+    if curl -f -sSL -o "$BIN_DIR/unutkantui" "https://github.com/ApoBen/Unutkan/releases/latest/download/unutkantui"; then
+        echo -e "${GREEN}[✓] TUI indirme tamamlandı.${NC}"
+    else
+        if [ -f "dist/unutkantui" ]; then
+            cp "dist/unutkantui" "$BIN_DIR/unutkantui"
+        else
+            # Try running with python interpreter directly if binary is missing as fallback
+            if [ -f "tui.py" ]; then
+                echo -e "${GREEN}[*] Python TUI kaynak kodu yerel olarak kopyalanıyor...${NC}"
+                cp "tui.py" "$BIN_DIR/unutkantui"
+            else
+                echo -e "${RED}[Hata] TUI dosyası indirilemedi ve yerel kaynaklar bulunamadı.${NC}"
+                exit 1
+            fi
+        fi
+    fi
+fi
 
-# Masaüstü Kısayolu (.desktop) Oluştur
+# Çalıştırılabilirlik izinleri ver
+chmod +x "$BIN_DIR/unutkan"
+chmod +x "$BIN_DIR/unutkantui"
+echo -e "${GREEN}[✓] Binary dosyaları başarıyla yerleştirildi:${NC}"
+echo -e "    - GUI: $BIN_DIR/unutkan"
+echo -e "    - TUI: $BIN_DIR/unutkantui"
+
+# Masaüstü Kısayolu (.desktop) Oluştur (Sadece GUI için)
 DESKTOP_FILE="$DESKTOP_DIR/unutkan.desktop"
 echo -e "${GREEN}[*] Masaüstü kısayolu oluşturuluyor...${NC}"
 
@@ -87,4 +124,5 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
 fi
 
 echo -e "\n${GREEN}=== Kurulum Başarıyla Tamamlandı! ===${NC}"
-echo -e "Uygulamayı çalıştırmak için terminale ${PURPLE}unutkan${NC} yazabilir veya uygulama menüsünden aratabilirsiniz.\n"
+echo -e "GUI arayüzü için: ${PURPLE}unutkan${NC}"
+echo -e "TUI (Terminal) arayüzü için: ${PURPLE}unutkantui${NC} yazabilirsiniz.\n"
