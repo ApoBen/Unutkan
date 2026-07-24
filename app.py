@@ -19,22 +19,16 @@ import shutil
 import re
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import gc
-from PIL import Image
-from pypdf import PdfReader, PdfWriter
+
+import core
 
 # --- Security Helpers ---
 MAX_VAULT_FILE_SIZE_MB = 100  # Default max file size for vault (MB)
 
 def validate_file_path(path):
-    """Validate that a path is a regular file, not a symlink, device, or directory."""
-    real_path = os.path.realpath(path)
-    if os.path.islink(path):
-        return False, real_path, "Sembolik linkler güvenlik nedeniyle kabul edilmiyor."
-    if not os.path.isfile(real_path):
-        return False, real_path, "Yol bir dosyaya işaret etmiyor (dizin, cihaz veya pipe olabilir)."
-    return True, real_path, ""
+    return core.validate_file_path(path)
 
-from PySide6.QtCore import Qt, QSize, QCoreApplication, QTimer
+from PySide6.QtCore import Qt, QSize, QCoreApplication, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QCheckBox,
@@ -43,6 +37,56 @@ from PySide6.QtWidgets import (
     QDialog
 )
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPainterPath, QLinearGradient
+
+# --- Worker Threads ---
+class CleanerWorker(QThread):
+    file_started = Signal(int, str)
+    file_finished = Signal(int, bool, str, str)
+    all_finished = Signal()
+
+    def __init__(self, files, overwrite, randomize, parent=None):
+        super().__init__(parent)
+        self.files = files
+        self.overwrite = overwrite
+        self.randomize = randomize
+
+    def run(self):
+        for i, file_info in enumerate(self.files):
+            if file_info["status"] == "Başarılı":
+                continue
+            self.file_started.emit(i, file_info["name"])
+            success, saved_path, err_msg = core.clean_file(
+                file_info["path"], self.overwrite, self.randomize
+            )
+            self.file_finished.emit(i, success, saved_path, err_msg)
+        self.all_finished.emit()
+
+
+class ShredderWorker(QThread):
+    file_started = Signal(int, str)
+    pass_progress = Signal(str, int, int)
+    file_finished = Signal(int, bool, str)
+    all_finished = Signal()
+
+    def __init__(self, files, method_index, parent=None):
+        super().__init__(parent)
+        self.files = files
+        self.method_index = method_index
+
+    def run(self):
+        for i, file_info in enumerate(self.files):
+            if file_info["status"] == "Silindi":
+                continue
+            filename = file_info["name"]
+            self.file_started.emit(i, filename)
+
+            def progress(p, total):
+                self.pass_progress.emit(filename, p, total)
+
+            success, err_msg = core.shred_file(file_info["path"], self.method_index, progress)
+            self.file_finished.emit(i, success, err_msg)
+        self.all_finished.emit()
+
 
 class LogoWidget(QWidget):
     def __init__(self, parent=None):
@@ -731,7 +775,7 @@ class CleanerWidget(QWidget):
                 return
                 
             self.log(f"Metadata inceleniyor: {os.path.basename(file_path)}")
-            metadata = self.extract_file_metadata(file_path)
+            metadata = core.extract_file_metadata(file_path)
             
             top_window = self.window()
             dialog = MetadataDialog(os.path.basename(file_path), metadata, top_window)
@@ -743,149 +787,7 @@ class CleanerWidget(QWidget):
             QMessageBox.critical(self, "Hata", f"Detay penceresi açılırken bir hata oluştu:\n{err_msg}")
 
     def extract_file_metadata(self, file_path):
-        ext = os.path.splitext(file_path)[1].lower()
-        metadata = {}
-        try:
-            if ext in ['.jpg', '.jpeg', '.png', '.webp']:
-                with Image.open(file_path) as img:
-                    exif = img.getexif()
-                    if exif:
-                        for tag_id in exif:
-                            tag = Image.ExifTags.TAGS.get(tag_id, tag_id)
-                            data = exif.get(tag_id)
-                            if isinstance(data, bytes):
-                                try:
-                                    data = data.decode(errors='replace')
-                                except (UnicodeDecodeError, AttributeError):
-                                    pass
-                            metadata[f"EXIF: {tag}"] = str(data)
-                    
-                    for k, v in img.info.items():
-                        if k not in ['exif', 'icc_profile']:
-                            metadata[f"Görüntü: {k}"] = str(v)
-                            
-            elif ext == '.pdf':
-                reader = PdfReader(file_path)
-                meta = reader.metadata
-                if meta:
-                    for k, v in meta.items():
-                        key = k[1:] if k.startswith('/') else k
-                        metadata[f"PDF: {key}"] = str(v)
-                        
-            elif ext in ['.docx', '.xlsx', '.pptx']:
-                with zipfile.ZipFile(file_path, 'r') as z:
-                    if 'docProps/core.xml' in z.namelist():
-                        xml_content = z.read('docProps/core.xml').decode('utf-8', errors='replace')
-                        tags = ['title', 'creator', 'lastModifiedBy', 'revision', 'created', 'modified']
-                        for tag in tags:
-                            pattern = re.compile(r'<dcterms:{0}[^>]*>(.*?)</dcterms:{0}>|<cp:{0}[^>]*>(.*?)</cp:{0}>|<dc:{0}[^>]*>(.*?)</dc:{0}>'.format(tag))
-                            match = pattern.search(xml_content)
-                            if match:
-                                val = next(group for group in match.groups() if group is not None)
-                                metadata[f"Office: {tag}"] = val
-                                
-            elif ext in ['.odt', '.ods', '.odp']:
-                with zipfile.ZipFile(file_path, 'r') as z:
-                    if 'meta.xml' in z.namelist():
-                        xml_content = z.read('meta.xml').decode('utf-8', errors='replace')
-                        tags = ['title', 'creator', 'creation-date', 'date', 'generator', 'editing-duration']
-                        for tag in tags:
-                            pattern = re.compile(r'<dc:{0}[^>]*>(.*?)</dc:{0}>|<meta:{0}[^>]*>(.*?)</meta:{0}>'.format(tag))
-                            match = pattern.search(xml_content)
-                            if match:
-                                val = next(group for group in match.groups() if group is not None)
-                                metadata[f"ODF: {tag}"] = val
-                                
-            elif ext in ['.mp3', '.flac', '.ogg', '.m4a']:
-                import mutagen
-                audio = mutagen.File(file_path)
-                if audio:
-                    for k, v in audio.items():
-                        metadata[f"Ses: {k}"] = str(v)
-        except Exception as e:
-            metadata["Hata"] = f"Metadata okunamadı: {str(e)}"
-            
-        return metadata
-
-    def open_file_dialog(self):
-        file_filter = (
-            "Desteklenen Dosyalar (*.png *.jpg *.jpeg *.webp *.pdf *.docx *.xlsx *.pptx *.odt *.ods *.odp *.mp3 *.flac *.ogg *.m4a);;"
-            "Resimler (*.png *.jpg *.jpeg *.webp);;"
-            "Belgeler (*.pdf *.docx *.xlsx *.pptx *.odt *.ods *.odp);;"
-            "Ses Dosyaları (*.mp3 *.flac *.ogg *.m4a)"
-        )
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Temizlenecek Dosyaları Seçin",
-            "",
-            file_filter
-        )
-        if paths:
-            self.handle_files_dropped(paths)
-
-    def handle_files_dropped(self, paths):
-        added_count = 0
-        for path in paths:
-            valid, real_path, err = validate_file_path(path)
-            if not valid:
-                self.log(f"Reddedildi ({os.path.basename(path)}): {err}", is_error=True)
-                continue
-
-            ext = os.path.splitext(real_path)[1].lower()
-            if ext not in self.supported_exts:
-                self.log(f"Desteklenmeyen dosya formatı yoksayıldı: {os.path.basename(real_path)}", is_error=True)
-                continue
-            
-            if any(f["path"] == real_path for f in self.selected_files):
-                continue
-            
-            file_info = {
-                "path": real_path,
-                "name": os.path.basename(real_path),
-                "status": "Hazır",
-                "error": ""
-            }
-            self.selected_files.append(file_info)
-            added_count += 1
-        
-        if added_count > 0:
-            self.log(f"{added_count} adet yeni dosya listeye eklendi.")
-            self.refresh_list()
-
-    def refresh_list(self):
-        self.safely_clear_list(self.list_widget)
-        for file_info in self.selected_files:
-            item = QListWidgetItem(self.list_widget)
-            item.setData(Qt.ItemDataRole.UserRole, file_info["path"])
-            path_to_inspect = file_info["path"]
-            row_widget = FileRowWidget(
-                file_info["name"],
-                file_info["path"],
-                file_info["status"],
-                file_info["error"],
-                is_shred=False,
-                on_inspect_clicked=lambda checked=False, p=path_to_inspect: self.inspect_file_metadata(p)
-            )
-            item.setSizeHint(row_widget.sizeHint())
-            self.list_widget.setItemWidget(item, row_widget)
-
-    def clear_list(self):
-        self.selected_files = []
-        self.safely_clear_list(self.list_widget)
-        self.log_console.clear()
-        self.log("Dosya listesi temizlendi.")
-
-    def set_ui_enabled(self, enabled):
-        self.btn_process.setEnabled(enabled)
-        self.btn_clear.setEnabled(enabled)
-        self.chk_overwrite.setEnabled(enabled)
-        self.chk_randomize.setEnabled(enabled)
-        self.drop_zone.setAcceptDrops(enabled)
-        self.btn_back.setEnabled(enabled)
-        if not enabled:
-            self.btn_process.setText("İşleniyor...")
-        else:
-            self.btn_process.setText("Metadata Temizle")
+        return core.extract_file_metadata(file_path)
 
     def process_files(self):
         if not self.selected_files:
@@ -898,184 +800,33 @@ class CleanerWidget(QWidget):
         overwrite = self.chk_overwrite.isChecked()
         randomize = self.chk_randomize.isChecked()
         
-        for i, file_info in enumerate(self.selected_files):
-            if file_info["status"] == "Başarılı":
-                continue
-                
-            file_info["status"] = "Temizleniyor..."
-            self.refresh_list()
-            QCoreApplication.processEvents()
-            
-            path = file_info["path"]
-            filename = file_info["name"]
-            
-            self.log(f"İşleniyor: {filename}")
-            
-            success, saved_path, err_msg = self.clean_file(path, overwrite, randomize)
-            
-            if success:
-                file_info["status"] = "Başarılı"
-                file_info["name"] = os.path.basename(saved_path)
-                file_info["path"] = saved_path
-                self.log(f"Başarılı: {filename} -> {os.path.basename(saved_path)}")
-            else:
-                file_info["status"] = "Hata"
-                file_info["error"] = err_msg
-                self.log(f"Hata: {filename} ({err_msg})", is_error=True)
-                
-            self.refresh_list()
-            QCoreApplication.processEvents()
+        self.worker = CleanerWorker(self.selected_files, overwrite, randomize)
+        self.worker.file_started.connect(self._on_clean_started)
+        self.worker.file_finished.connect(self._on_clean_finished)
+        self.worker.all_finished.connect(self._on_clean_all_finished)
+        self.worker.start()
 
+    def _on_clean_started(self, index, filename):
+        self.selected_files[index]["status"] = "Temizleniyor..."
+        self.refresh_list()
+        self.log(f"İşleniyor: {filename}")
+
+    def _on_clean_finished(self, index, success, saved_path, err_msg):
+        file_info = self.selected_files[index]
+        if success:
+            file_info["status"] = "Başarılı"
+            file_info["name"] = os.path.basename(saved_path)
+            file_info["path"] = saved_path
+            self.log(f"Başarılı: {os.path.basename(saved_path)}")
+        else:
+            file_info["status"] = "Hata"
+            file_info["error"] = err_msg
+            self.log(f"Hata: {file_info['name']} ({err_msg})", is_error=True)
+        self.refresh_list()
+
+    def _on_clean_all_finished(self):
         self.log("İşlem tamamlandı.")
         self.set_ui_enabled(True)
-
-    def clean_file(self, file_path, overwrite, randomize):
-        temp_path = ""
-        try:
-            valid, real_path, err = validate_file_path(file_path)
-            if not valid:
-                return False, "", err
-            file_path = real_path
-
-            directory = os.path.dirname(file_path)
-            filename = os.path.basename(file_path)
-            name, ext = os.path.splitext(filename)
-            ext_lower = ext.lower()
-
-            if randomize:
-                new_name = uuid.uuid4().hex
-            else:
-                new_name = name if overwrite else f"{name}_temiz"
-            
-            output_filename = f"{new_name}{ext_lower}"
-            output_path = os.path.join(directory, output_filename)
-            temp_path = os.path.join(directory, f".tmp_{uuid.uuid4().hex}{ext_lower}")
-
-            if ext_lower in ['.jpg', '.jpeg', '.webp', '.png']:
-                self._clean_image_metadata(file_path, temp_path, ext_lower)
-            elif ext_lower == '.pdf':
-                self._clean_pdf_metadata(file_path, temp_path)
-            elif ext_lower in ['.docx', '.xlsx', '.pptx']:
-                self._clean_office_metadata(file_path, temp_path)
-            elif ext_lower in ['.odt', '.ods', '.odp']:
-                self._clean_opendocument_metadata(file_path, temp_path)
-            elif ext_lower in ['.mp3', '.flac', '.ogg', '.m4a']:
-                self._clean_audio_metadata(file_path, temp_path)
-            else:
-                return False, "", f"Desteklenmeyen dosya formatı: {ext_lower}"
-
-            if overwrite:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                os.rename(temp_path, output_path)
-            else:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                os.rename(temp_path, output_path)
-
-            return True, output_path, ""
-
-        except Exception as e:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-            return False, "", str(e)
-
-    def _clean_image_metadata(self, input_path, output_path, ext_lower):
-        with Image.open(input_path) as img:
-            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                clean_img = img.copy()
-            else:
-                clean_img = Image.new(img.mode, img.size)
-                clean_img.putdata(img.getdata())
-
-            clean_img.info = {}
-
-            if ext_lower in ['.jpg', '.jpeg']:
-                clean_img.save(output_path, format='JPEG', exif=b"", quality=95)
-            elif ext_lower == '.png':
-                clean_img.save(output_path, format='PNG', pnginfo=None)
-            elif ext_lower == '.webp':
-                clean_img.save(output_path, format='WEBP', exif=b"", quality=90)
-            else:
-                clean_img.save(output_path)
-
-    def _clean_pdf_metadata(self, input_path, output_path):
-        reader = PdfReader(input_path)
-        writer = PdfWriter()
-
-        for page in reader.pages:
-            writer.add_page(page)
-
-        writer.add_metadata({
-            "/Producer": "",
-            "/Creator": "",
-            "/Author": "",
-            "/Title": "",
-            "/Subject": "",
-            "/Keywords": "",
-            "/CreationDate": "",
-            "/ModDate": ""
-        })
-
-        if "/Metadata" in writer._root_object:
-            del writer._root_object["/Metadata"]
-
-        with open(output_path, 'wb') as f:
-            writer.write(f)
-
-    def _clean_office_metadata(self, input_path, output_path):
-        blank_core = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-            'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
-            'xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
-            '</cp:coreProperties>'
-        )
-        
-        with zipfile.ZipFile(input_path, 'r') as yin:
-            with zipfile.ZipFile(output_path, 'w') as yout:
-                for item in yin.infolist():
-                    if item.filename == 'docProps/core.xml':
-                        yout.writestr(item.filename, blank_core)
-                    elif item.filename == 'docProps/custom.xml':
-                        continue
-                    else:
-                        yout.writestr(item, yin.read(item.filename))
-
-    def _clean_opendocument_metadata(self, input_path, output_path):
-        blank_meta = (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
-            'xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" '
-            'xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3">\n'
-            '  <office:meta>\n'
-            '  </office:meta>\n'
-            '</office:document-meta>'
-        )
-        
-        with zipfile.ZipFile(input_path, 'r') as yin:
-            with zipfile.ZipFile(output_path, 'w') as yout:
-                for item in yin.infolist():
-                    if item.filename == 'Thumbnails/thumbnail.png':
-                        continue
-                    
-                    if item.filename == 'meta.xml':
-                        yout.writestr(item.filename, blank_meta)
-                    else:
-                        yout.writestr(item, yin.read(item.filename))
-
-    def _clean_audio_metadata(self, input_path, output_path):
-        import mutagen
-        shutil.copyfile(input_path, output_path)
-        audio = mutagen.File(output_path)
-        if audio is not None:
-            audio.delete()
-            audio.save()
 
 
 class ShredderWidget(QWidget):
@@ -1340,93 +1091,35 @@ class ShredderWidget(QWidget):
         
         method_index = self.combo_method.currentIndex()
         
-        for i, file_info in enumerate(self.selected_files):
-            if file_info["status"] == "Silindi":
-                continue
-                
-            file_info["status"] = "Siliniyor..."
-            self.refresh_list()
-            QCoreApplication.processEvents()
-            
-            path = file_info["path"]
-            filename = file_info["name"]
-            
-            self.log(f"İmha ediliyor: {filename}")
-            
-            success, err_msg = self.shred_file(path, method_index)
-            
-            if success:
-                file_info["status"] = "Silindi"
-                self.log(f"İmha Edildi (Geri döndürülemez): {filename}")
-            else:
-                file_info["status"] = "Hata"
-                file_info["error"] = err_msg
-                self.log(f"Hata: {filename} ({err_msg})", is_error=True)
-                
-            self.refresh_list()
-            QCoreApplication.processEvents()
+        self.worker = ShredderWorker(self.selected_files, method_index)
+        self.worker.file_started.connect(self._on_shred_started)
+        self.worker.pass_progress.connect(self._on_shred_pass_progress)
+        self.worker.file_finished.connect(self._on_shred_finished)
+        self.worker.all_finished.connect(self._on_shred_all_finished)
+        self.worker.start()
 
+    def _on_shred_started(self, index, filename):
+        self.selected_files[index]["status"] = "Siliniyor..."
+        self.refresh_list()
+        self.log(f"İmha ediliyor: {filename}")
+
+    def _on_shred_pass_progress(self, filename, pass_num, total_passes):
+        self.log(f"  [{filename}] Geçiş {pass_num}/{total_passes} yazılıyor...")
+
+    def _on_shred_finished(self, index, success, err_msg):
+        file_info = self.selected_files[index]
+        if success:
+            file_info["status"] = "Silindi"
+            self.log(f"İmha Edildi (Geri döndürülemez): {file_info['name']}")
+        else:
+            file_info["status"] = "Hata"
+            file_info["error"] = err_msg
+            self.log(f"Hata: {file_info['name']} ({err_msg})", is_error=True)
+        self.refresh_list()
+
+    def _on_shred_all_finished(self):
         self.log("Tüm imha işlemleri tamamlandı.")
         self.set_ui_enabled(True)
-
-    def shred_file(self, file_path, method_index):
-        try:
-            valid, real_path, err = validate_file_path(file_path)
-            if not valid:
-                return False, err
-            file_path = real_path
-                
-            file_size = os.path.getsize(file_path)
-            
-            if method_index == 0:
-                passes = [b'\x00']
-            elif method_index == 1:
-                passes = ['random', 'random', b'\x00']
-            else:
-                passes = ['random', b'\x55', b'\xAA', 'random', b'\x00', 'random', b'\x00']
-
-            # Open with O_NOFOLLOW to prevent symlink race conditions
-            fd = os.open(file_path, os.O_RDWR | os.O_NOFOLLOW)
-            with os.fdopen(fd, "r+b") as f:
-                for p_num, pattern in enumerate(passes):
-                    self.log(f"  [{os.path.basename(file_path)}] Geçiş {p_num + 1}/{len(passes)} yazılıyor...")
-                    f.seek(0)
-                    
-                    block_size = 64 * 1024
-                    bytes_written = 0
-                    
-                    while bytes_written < file_size:
-                        left = file_size - bytes_written
-                        current_block = min(block_size, left)
-                        
-                        if pattern == 'random':
-                            data = os.urandom(current_block)
-                        else:
-                            data = pattern * current_block
-                            
-                        f.write(data)
-                        bytes_written += current_block
-                    
-                    f.flush()
-                    os.fsync(f.fileno())
-
-            directory = os.path.dirname(file_path)
-            ext = os.path.splitext(file_path)[1]
-            temp_name = uuid.uuid4().hex + ext
-            temp_path = os.path.join(directory, temp_name)
-            
-            os.rename(file_path, temp_path)
-            
-            with open(temp_path, "w") as f:
-                f.truncate(0)
-                f.flush()
-                os.fsync(f.fileno())
-                
-            os.remove(temp_path)
-            return True, ""
-            
-        except Exception as e:
-            return False, str(e)
 
 
 class SanitizerWidget(QWidget):
@@ -1589,100 +1282,23 @@ class SanitizerWidget(QWidget):
         self.txt_output.setPlainText(sanitized)
 
     def sanitize_text(self, text, clean_links, mask_emails, mask_phones, mask_secrets):
-        result = text
-        
-        # 1. Mask API keys & secrets FIRST to avoid regex collisions with phone numbers
-        if mask_secrets:
-            google_key_pattern = re.compile(r'AIzaSy[0-9A-Za-z-_]{33}')
-            result = google_key_pattern.sub("[GOOGLE_API_KEY_SECRET]", result)
-            
-            aws_key_pattern = re.compile(r'AKIA[0-9A-Z]{16}')
-            result = aws_key_pattern.sub("[AWS_API_KEY_SECRET]", result)
-            
-            generic_secret_pattern = re.compile(r'(?i)(bearer\s+|token\s*[:=]\s*|key\s*[:=]\s*)[a-zA-Z0-9_\-\.]{12,}')
-            result = generic_secret_pattern.sub(lambda m: f"{m.group(1)}[SECRET_TOKEN]", result)
-
-        # 2. Clean link tracking parameters
-        if clean_links:
-            url_pattern = re.compile(r'https?://[^\s\)\}\]\"\'>]+')
-            result = url_pattern.sub(lambda m: self._clean_url(m.group(0)), result)
-            
-        # 3. Mask email addresses
-        if mask_emails:
-            email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-            result = email_pattern.sub(lambda m: self._mask_email(m.group(0)), result)
-            
-        # 4. Mask phone numbers (with word boundaries to avoid matching key digits)
-        if mask_phones:
-            phone_pattern = re.compile(r'\b(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b')
-            result = phone_pattern.sub(lambda m: self._mask_phone(m.group(0)), result)
-            
-        return result
-
-    def _clean_url(self, url_str):
-        try:
-            trail = ""
-            while url_str and url_str[-1] in ['.', ',', ';', '?', '!', ':']:
-                trail = url_str[-1] + trail
-                url_str = url_str[:-1]
-
-            parsed = urlparse(url_str)
-            if not parsed.scheme or not parsed.netloc:
-                return url_str + trail
-            
-            query = parse_qs(parsed.query)
-            tracking_keys = [
-                'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 
-                'fbclid', 'gclid', 'igshid', 'mc_eid', 'aff_id', 'ref', 'source'
-            ]
-            for k in list(query.keys()):
-                if k.lower() in tracking_keys or k.lower().startswith('utm_'):
-                    query.pop(k, None)
-                    
-            new_query = urlencode(query, doseq=True)
-            new_parts = list(parsed)
-            new_parts[4] = new_query
-            return urlunparse(new_parts) + trail
-        except (ValueError, KeyError):
-            return url_str
-
-    def _mask_email(self, email_str):
-        try:
-            mailbox, domain = email_str.split('@', 1)
-            if len(mailbox) <= 2:
-                masked = mailbox[0] + '*' * (len(mailbox) - 1)
-            else:
-                masked = mailbox[0] + '***' + mailbox[-1]
-            return f"{masked}@{domain}"
-        except (ValueError, IndexError):
-            return email_str
-
-    def _mask_phone(self, phone_str):
-        digits = [c for c in phone_str if c.isdigit()]
-        if len(digits) < 7:
-            return phone_str
-            
-        clean_digits = "".join(digits)
-        if clean_digits.startswith("90") and len(clean_digits) >= 11:
-            rest = clean_digits[2:]
-            return f"+90 {rest[:3]} *** **{rest[-2:]}"
-        elif clean_digits.startswith("0") and len(clean_digits) >= 10:
-            return f"0{clean_digits[1:4]} *** **{clean_digits[-2:]}"
-        else:
-            return f"{clean_digits[:3]} *** **{clean_digits[-2:]}"
+        settings = {
+            'urls': clean_links,
+            'emails': mask_emails,
+            'phones': mask_phones,
+            'secrets': mask_secrets
+        }
+        return core.sanitize_text(text, settings)
 
 
 class VaultWidget(QWidget):
     def __init__(self, on_back_clicked, parent=None):
         super().__init__(parent)
         self.on_back_clicked = on_back_clicked
-        
-        # Memory states
-        self.mem_text = None       # bytearray for text
-        self.mem_files = {}        # dict mapping filename -> bytearray
+        self.vault = core.RamVault()
         self.time_left = 0
-        self.total_time = 120      # default 2 mins
-        self.max_file_size_mb = MAX_VAULT_FILE_SIZE_MB  # User-configurable file size limit
+        self.total_time = 120
+        self.max_file_size_mb = MAX_VAULT_FILE_SIZE_MB
         
         # QTimer
         self.timer = QTimer(self)
@@ -2032,7 +1648,7 @@ class VaultWidget(QWidget):
             self.log("Belleğe yüklenecek metin girilmedi.", is_error=True)
             return
             
-        self.mem_text = bytearray(text, 'utf-8')
+        self.vault.mem_text = bytearray(text, 'utf-8')
         del text  # Remove reference to immutable str copy
         gc.collect()  # Best-effort garbage collection
         self.txt_vault_input.clear()
@@ -2040,9 +1656,9 @@ class VaultWidget(QWidget):
         self.start_vault_timer()
 
     def unlock_text_from_ram(self):
-        if self.mem_text:
+        if self.vault.mem_text:
             try:
-                decoded = self.mem_text.decode('utf-8')
+                decoded = self.vault.mem_text.decode('utf-8')
                 self.txt_vault_input.setPlainText(decoded)
                 self.log("Metin verisi bellekten okunarak ekrana getirildi.")
             except Exception as e:
@@ -2080,7 +1696,7 @@ class VaultWidget(QWidget):
                 with open(real_path, 'rb') as f:
                     data = f.read()
                 # Store as mutable bytearray in memory, delete immutable bytes copy
-                self.mem_files[filename] = bytearray(data)
+                self.vault.mem_files[filename] = bytearray(data)
                 del data
                 gc.collect()
                 self.log(f"Dosya RAM belleğe yüklendi: {filename} ({file_size} bayt)")
@@ -2094,7 +1710,7 @@ class VaultWidget(QWidget):
 
     def refresh_file_list(self):
         self.safely_clear_list(self.list_files)
-        for filename, data in self.mem_files.items():
+        for filename, data in self.vault.mem_files.items():
             item = QListWidgetItem(self.list_files)
             # Store filename in user role data
             item.setData(Qt.ItemDataRole.UserRole, filename)
@@ -2114,8 +1730,8 @@ class VaultWidget(QWidget):
             return
             
         filename = selected_items[0].data(Qt.ItemDataRole.UserRole)
-        if filename in self.mem_files:
-            file_data = self.mem_files[filename]
+        if filename in self.vault.mem_files:
+            file_data = self.vault.mem_files[filename]
             save_path, _ = QFileDialog.getSaveFileName(self, "Dosyayı Dışarı Aktar", filename, "Tüm Dosyalar (*.*)")
             if save_path:
                 try:
@@ -2145,47 +1761,15 @@ class VaultWidget(QWidget):
             # Clear log history to avoid leaking filenames in log console
             self.log_console.clear()
 
-            # Wiping text memory
-            wipe_errors = []
-            if self.mem_text:
-                try:
-                    mv = memoryview(self.mem_text)
-                    block_size = 1024 * 1024 # 1MB blocks
-                    zero_block = b'\x00' * block_size
-                    length = len(self.mem_text)
-                    for offset in range(0, length, block_size):
-                        chunk = min(block_size, length - offset)
-                        mv[offset:offset+chunk] = zero_block[:chunk]
-                    self.log("[Güvenli] Metin bellek bölgesi güvenli şekilde kazındı.")
-                except (TypeError, ValueError, BufferError) as e:
-                    wipe_errors.append(f"Metin kazıma hatası: {e}")
-                    self.log(f"[UYARI] Metin bellek kazıma başarısız: {e}", is_error=True)
-                self.mem_text = None
-
-            # Wiping files memory
-            if self.mem_files:
-                for filename, data in list(self.mem_files.items()):
-                    try:
-                        mv = memoryview(data)
-                        block_size = 1024 * 1024 # 1MB blocks
-                        zero_block = b'\x00' * block_size
-                        length = len(data)
-                        for offset in range(0, length, block_size):
-                            chunk = min(block_size, length - offset)
-                            mv[offset:offset+chunk] = zero_block[:chunk]
-                        self.log(f"[Güvenli] Dosya tamponu güvenli şekilde kazındı.")
-                    except (TypeError, ValueError, BufferError) as e:
-                        wipe_errors.append(f"Dosya kazıma hatası: {e}")
-                        self.log(f"[UYARI] Dosya bellek kazıma başarısız: {e}", is_error=True)
-                self.mem_files.clear()
+            # Delegate wipe to RamVault core
+            def log_callback(msg):
+                self.log(msg)
+            self.vault.wipe(log_callback)
                 
             self.safely_clear_list(self.list_files)
             self.txt_vault_input.clear()
             gc.collect()
-            if wipe_errors:
-                self.log("[UYARI] Bazı bellek bölgeleri güvenli kazınamadı!", is_error=True)
-            else:
-                self.log("Geçici bellek tamamen kazındı, kasa kilitlendi.")
+            self.log("Geçici bellek tamamen kazındı, kasa kilitlendi.")
         except Exception as e:
             import traceback
             err_msg = traceback.format_exc()

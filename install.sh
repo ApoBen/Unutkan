@@ -82,6 +82,9 @@ else
             if [ -f "tui.py" ]; then
                 echo -e "${GREEN}[*] Python TUI kaynak kodu yerel olarak kopyalanıyor...${NC}"
                 cp "tui.py" "$BIN_DIR/unutkantui"
+                if [ -f "core.py" ]; then
+                    cp "core.py" "$BIN_DIR/core.py"
+                fi
             else
                 echo -e "${RED}[Hata] TUI dosyası indirilemedi ve yerel kaynaklar bulunamadı.${NC}"
                 exit 1

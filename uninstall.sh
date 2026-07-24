@@ -37,6 +37,9 @@ fi
 if [ -f "$BIN_DIR/unutkantui" ]; then
     echo -e "${GREEN}[*] TUI binary dosyası kaldırılıyor: $BIN_DIR/unutkantui${NC}"
     rm "$BIN_DIR/unutkantui"
+    if [ -f "$BIN_DIR/core.py" ]; then
+        rm "$BIN_DIR/core.py"
+    fi
 else
     echo -e "${BLUE}[Bilgi] TUI binary dosyası bulunamadı.${NC}"
 fi
