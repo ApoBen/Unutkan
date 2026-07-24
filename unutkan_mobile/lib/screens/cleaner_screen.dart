@@ -132,7 +132,7 @@ class _CleanerScreenState extends State<CleanerScreen> {
 
   void _inspectMetadata(String filePath, String filename) {
     _log('Metadata inceleniyor: $filename');
-    final meta = PrivacyCore.extract_file_metadata(filePath);
+    final meta = PrivacyCore.extractFileMetadata(filePath);
 
     showDialog(
       context: context,
@@ -209,7 +209,6 @@ class _CleanerScreenState extends State<CleanerScreen> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _isProcessing ? Colors.white.withOpacity(0.05) : const Color(0xFF3584E4),
-                    style: BorderStyle.dashed,
                     width: 2,
                   ),
                 ),

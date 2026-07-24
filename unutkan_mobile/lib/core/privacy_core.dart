@@ -23,6 +23,11 @@ class PrivacyCore {
     }
   }
 
+  static Map<String, String> extractFileMetadata(String filePath) {
+    final ext = p.extension(filePath).toLowerCase();
+    return {"Format": ext.replaceAll('.', '').toUpperCase(), "Durum": "Temizlenmeye Hazır"};
+  }
+
   /// Sanitizes URL tracking parameters, email addresses, phone numbers, and secrets.
   static String sanitizeText(String text, Map<String, bool> settings) {
     if (text.isEmpty) return "";
@@ -55,7 +60,7 @@ class PrivacyCore {
 
     // 2. Clean URLs
     if (cleanUrls) {
-      final urlReg = RegExp(r'https?://[^\s\)\}\]\"\'>]+');
+      final urlReg = RegExp(r"""https?://[^\s\)\}\]'"'>]+""");
       result = result.replaceAllMapped(urlReg, (match) {
         return _cleanUrl(match.group(0)!);
       });

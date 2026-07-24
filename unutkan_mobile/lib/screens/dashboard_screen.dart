@@ -41,7 +41,7 @@ class DashboardScreen extends StatelessWidget {
               // Subtitle
               const Text(
                 'Kişisel veri güvenliğinizi artıran dijital hijyen araç kutusu.',
-                textAlign: Alignment.center,
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
                   color: Color(0xFFB3B3B3),

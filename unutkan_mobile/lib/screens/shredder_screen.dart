@@ -172,7 +172,6 @@ class _ShredderScreenState extends State<ShredderScreen> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _isProcessing ? Colors.white.withOpacity(0.05) : const Color(0xFFF66151),
-                    style: BorderStyle.dashed,
                     width: 2,
                   ),
                 ),

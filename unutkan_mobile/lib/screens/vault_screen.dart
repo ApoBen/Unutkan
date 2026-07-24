@@ -31,7 +31,7 @@ class _VaultScreenState extends State<VaultScreen> with SingleTickerProviderStat
 
   @override
   void initState() {
-    super.key;
+    super.initState();
     _tabController = TabController(length: 2, vsync: this);
   }
 
@@ -381,7 +381,6 @@ class _VaultScreenState extends State<VaultScreen> with SingleTickerProviderStat
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: const Color(0xFF2EC27E),
-                                style: BorderStyle.dashed,
                               ),
                             ),
                             child: const Row(

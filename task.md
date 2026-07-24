@@ -1,0 +1,11 @@
+- [x] core.py modülünün oluşturulması ve ortak mantığın buraya taşınması
+- [x] app.py ve tui.py arasındaki kod tekrarlarının temizlenmesi
+- [x] PDF ve Office metadata temizleme tutarsızlıklarının giderilmesi
+- [x] Metin arındırıcı Türkiye telefon numaraları ve Google API Key regex desenlerinin iyileştirilmesi
+- [x] GUI'de ağır işlemler için QThread iş parçacığı desteği (CleanerWorker ve ShredderWorker) eklenmesi
+- [x] install.sh ve uninstall.sh fallback kopyalama mekanizmalarının core.py'yi kapsayacak şekilde güncellenmesi
+- [x] test_core.py birim testlerinin yazılması ve başarıyla çalıştırılması
+- [x] Yerel bilgisayara Flutter SDK ve Android SDK araçlarının kurulması
+- [x] Flutter projesinin Android/Gradle/Kotlin yapılandırmalarının tamamlanması
+- [x] Türkçe karakter kodlama (Masaüstü) sorunlarının derleme sırasında aşılması
+- [x] Unutkan Mobil Android uygulamasının APK olarak derlenmesi
